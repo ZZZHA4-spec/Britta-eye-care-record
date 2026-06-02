@@ -16,6 +16,51 @@
     { id: "month6", label: "术后 6 个月复查", offsetDays: 180 },
     { id: "year1", label: "术后 1 年复查", offsetDays: 365 }
   ];
+  const presetSurgeryDate = "2026-05-30";
+  const presetTimes = {
+    first: ["08:00", "12:00", "18:00", "22:00"],
+    second: ["08:10", "12:10", "18:10", "22:10"],
+    third: ["08:20", "12:20", "18:20", "22:20"],
+    fourth: ["08:30", "12:30", "18:30", "22:30"],
+    fifth: ["08:40", "12:40", "18:40", "22:40"]
+  };
+  const presetPlan = [
+    {
+      name: "① 迪友（加替沙星眼用凝胶）",
+      startDate: "2026-05-31",
+      durationDays: 7,
+      times: presetTimes.first,
+      note: "术后第 1-7 天使用，每天 4 次；术后第 8 天停用。"
+    },
+    {
+      name: "② 妥布霉素地塞米松滴眼液",
+      startDate: "2026-05-31",
+      durationDays: 7,
+      times: presetTimes.second,
+      note: "术后第 1-7 天使用，每天 4 次；术后第 8 天停用。"
+    },
+    {
+      name: "③ 倍然滴眼液",
+      startDate: "2026-05-31",
+      durationDays: 30,
+      times: presetTimes.third,
+      note: "每天 4 次，用完为止；这里先按 30 天生成提醒，可按实际情况删除。"
+    },
+    {
+      name: "④ 速高捷（小牛血去蛋白）滴眼液",
+      startDate: "2026-05-31",
+      durationDays: 30,
+      times: presetTimes.fourth,
+      note: "每天 4 次，用完为止；这里先按 30 天生成提醒，可按实际情况删除。"
+    },
+    {
+      name: "⑤ 0.1% 氟米龙（艾氟龙）滴眼液",
+      startDate: "2026-06-07",
+      durationDays: 20,
+      times: presetTimes.fifth,
+      note: "术后第 8 天开始使用，每天 4 次，共 20 天。"
+    }
+  ];
 
   let state = loadState();
   let activeTab = "today";
@@ -69,14 +114,25 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return fallback;
       const parsed = JSON.parse(raw);
-      return {
+      return normalizeState({
         ...fallback,
         ...parsed,
         followUps: parsed.followUps && parsed.followUps.length ? parsed.followUps : fallback.followUps
-      };
+      });
     } catch (error) {
       return fallback;
     }
+  }
+
+  function normalizeState(value) {
+    return {
+      medicines: Array.isArray(value.medicines) ? value.medicines : [],
+      logs: value.logs && typeof value.logs === "object" ? value.logs : {},
+      surgeryDate: value.surgeryDate || todayISO(),
+      followUps: Array.isArray(value.followUps) && value.followUps.length
+        ? value.followUps
+        : followTemplates.map((item) => ({ ...item, enabled: true }))
+    };
   }
 
   function saveState() {
@@ -164,7 +220,8 @@
       startDate: fields.startDate.value || todayISO(),
       durationDays: Math.max(1, Number(fields.durationDays.value) || 1),
       timesPerDay,
-      times: times.length ? times : defaultTimes[timesPerDay]
+      times: times.length ? times : defaultTimes[timesPerDay],
+      note: ""
     };
 
     if (!medicine.name) {
@@ -220,6 +277,65 @@
       followUps: state.followUps.map((item) => ({ ...item, enabled: true }))
     });
     showToast("已恢复默认复诊提醒");
+  }
+
+  function loadPresetPlan() {
+    const hasData = state.medicines.length || Object.keys(state.logs).length;
+    if (hasData && !window.confirm("载入预设方案会覆盖当前药品列表和打卡记录，确定继续吗？")) {
+      return;
+    }
+
+    setState({
+      ...state,
+      surgeryDate: presetSurgeryDate,
+      medicines: presetPlan.map((medicine) => ({
+        ...medicine,
+        id: uid(),
+        timesPerDay: medicine.times.length
+      })),
+      logs: {},
+      followUps: followTemplates.map((item) => ({ ...item, enabled: true }))
+    });
+    showToast("已载入 Britta 术后用药方案");
+  }
+
+  function exportBackup() {
+    const payload = {
+      app: "eye-care-checkin",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      state: normalizeState(state)
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+    const link = document.createElement("a");
+    const date = todayISO().replaceAll("-", "");
+    link.href = URL.createObjectURL(blob);
+    link.download = `eye-care-backup-${date}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    showToast("已导出备份文件");
+  }
+
+  function importBackup(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        const importedState = parsed.state ? parsed.state : parsed;
+        const normalized = normalizeState(importedState);
+        if (!Array.isArray(normalized.medicines)) throw new Error("Invalid backup");
+        if (!window.confirm("导入备份会替换当前药品、复诊和打卡记录，确定继续吗？")) return;
+        activeTab = "today";
+        setState(normalized);
+        showToast("已导入备份");
+      } catch (error) {
+        showToast("备份文件格式不正确");
+      }
+    };
+    reader.readAsText(file, "utf-8");
   }
 
   function icsDate(date, time) {
@@ -353,6 +469,7 @@
           ${navButton("medicine", "+", "药品")}
           ${navButton("follow", "⌁", "复诊")}
           ${navButton("history", "◷", "记录")}
+          ${navButton("backup", "⇅", "备份")}
         </div>
       </nav>
     `;
@@ -371,6 +488,7 @@
     if (activeTab === "medicine") return renderMedicineTab();
     if (activeTab === "follow") return renderFollowTab();
     if (activeTab === "history") return renderHistoryTab();
+    if (activeTab === "backup") return renderBackupTab();
     return renderTodayTab();
   }
 
@@ -404,10 +522,10 @@
     const log = state.logs[task.key];
     return `
       <button class="dose-card ${log ? "done" : ""}" data-dose-key="${task.key}" data-dose-name="${escapeHTML(task.medicine.name)}">
-        <span>
-          <span class="dose-name">${escapeHTML(task.medicine.name)}</span>
-          <span class="dose-meta">${log ? `已打卡 ${new Date(log.doneAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "未打卡"}</span>
-        </span>
+          <span>
+            <span class="dose-name">${escapeHTML(task.medicine.name)}</span>
+          <span class="dose-meta">${log ? `已打卡 ${new Date(log.doneAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : (task.medicine.note ? escapeHTML(task.medicine.note) : "未打卡")}</span>
+          </span>
         <span class="checkmark">${log ? "✓" : ""}</span>
       </button>
     `;
@@ -421,6 +539,13 @@
             <h2 class="panel-title">添加药品</h2>
             <p class="panel-subtitle">设置用药天数、每日次数和提醒时间。</p>
           </div>
+        </div>
+        <div class="preset-card">
+          <div>
+            <h3>Britta 术后方案</h3>
+            <p>手术日期 2026-05-30。按医嘱预设 5 种眼药，并自动错开每种药至少 10 分钟。</p>
+          </div>
+          <button class="button" data-load-preset>一键载入</button>
         </div>
         <form id="medicine-form" class="form-grid">
           <label>药品名称<input name="name" placeholder="例如 左氧氟沙星滴眼液" autocomplete="off" /></label>
@@ -460,6 +585,7 @@
           <div>
             <h3 class="medicine-name">${escapeHTML(medicine.name)}</h3>
             <p class="card-meta">${formatDate(medicine.startDate)} 至 ${formatDate(endDate)}，共 ${medicine.durationDays} 天</p>
+            ${medicine.note ? `<p class="card-note">${escapeHTML(medicine.note)}</p>` : ""}
           </div>
           <button class="button danger" data-delete-medicine="${medicine.id}">删除</button>
         </div>
@@ -467,6 +593,32 @@
           ${medicine.times.map((time) => `<span class="tag">${time}</span>`).join("")}
         </div>
       </article>
+    `;
+  }
+
+  function renderBackupTab() {
+    return `
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">备份与恢复</h2>
+            <p class="panel-subtitle">导出当前手机里的药品、复诊和打卡记录；换手机或误删后可以导入恢复。</p>
+          </div>
+        </div>
+        <div class="backup-grid">
+          <article class="backup-card">
+            <h3>导出备份</h3>
+            <p>生成一个 JSON 文件，包含当前所有本地记录。建议复查前或修改方案前导出一次。</p>
+            <button class="button" data-export-backup>导出备份文件</button>
+          </article>
+          <article class="backup-card">
+            <h3>导入备份</h3>
+            <p>选择之前导出的备份文件。导入会替换当前手机里的记录。</p>
+            <input id="backup-file" class="file-input" type="file" accept="application/json,.json" />
+            <button class="button secondary" data-import-backup>选择备份文件</button>
+          </article>
+        </div>
+      </section>
     `;
   }
 
@@ -577,6 +729,11 @@
       button.addEventListener("click", () => removeFollowUp(button.dataset.deleteFollow));
     });
 
+    const loadPreset = document.querySelector("[data-load-preset]");
+    if (loadPreset) {
+      loadPreset.addEventListener("click", loadPresetPlan);
+    }
+
     const medicineForm = document.getElementById("medicine-form");
     if (medicineForm) {
       medicineForm.addEventListener("submit", (event) => {
@@ -604,6 +761,18 @@
     const restoreFollow = document.querySelector("[data-restore-follow]");
     if (restoreFollow) {
       restoreFollow.addEventListener("click", restoreFollowUps);
+    }
+
+    const exportBackupButton = document.querySelector("[data-export-backup]");
+    if (exportBackupButton) {
+      exportBackupButton.addEventListener("click", exportBackup);
+    }
+
+    const importBackupButton = document.querySelector("[data-import-backup]");
+    const backupFile = document.getElementById("backup-file");
+    if (importBackupButton && backupFile) {
+      importBackupButton.addEventListener("click", () => backupFile.click());
+      backupFile.addEventListener("change", () => importBackup(backupFile.files[0]));
     }
 
     document.querySelectorAll("[data-export]").forEach((button) => {

@@ -1,4 +1,4 @@
-const CACHE_NAME = "eye-care-checkin-v1";
+const CACHE_NAME = "eye-care-checkin-v2";
 const APP_FILES = [
   "./",
   "./index.html",
